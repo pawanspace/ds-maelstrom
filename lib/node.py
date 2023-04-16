@@ -2,6 +2,7 @@ import sys
 import threading
 import json
 import select
+import time
 
 class Node():
     
@@ -12,6 +13,7 @@ class Node():
         self.lock = threading.RLock()
         self.log_lock = threading.Lock()
         self.handlers = dict()
+        self.callbacks = dict()
         self.init_handlers()
 
     def init_handlers(self):
@@ -35,24 +37,31 @@ class Node():
         self.reply(response, request)
                 
     def handle_broadcast(self, request, broadcast):
+        response = self.generate_response(request, 'broadcast_ok', request['src'])
+        self.reply(response, request)
+        
         message = request['body']['message']
+        new_message = False
         # lock this so that we can block handle_read while
         # updating the messages
         with self.lock:
             if message not in broadcast.messages:
                 broadcast.messages.add(message)
-                
-                # send message to all neighbors
-                for n in broadcast.neighbors:
-                    if n != request['src']:
-                        response = self.generate_response(request, 'broadcast', n)
-                        response['body']['message'] = message
-                        self.send(response)
+                new_message = True
 
-        # if message is not from neighbor reply with broadcast_ok
-        if request['body'].get('msg_id'):
-            response = self.generate_response(request, 'broadcast_ok', request['src'])
-            self.reply(response, request)
+        if (new_message):
+            neighbors = broadcast.neighbors.copy()            
+            self.log(f'Sending message to neighbors: {neighbors}')
+            neighbors.remove(request['src']) if request['src'] in neighbors else None
+            # send message to all neighbors
+            while neighbors:
+                for n in neighbors:
+                    response = self.generate_response(request, 'broadcast', n)
+                    response['body']['message'] = message
+                    callback = lambda resp: neighbors.remove(n) if (resp['body']['type'] == 'broadcast_ok' and n in neighbors) else None
+                    self.rpc(response, request, callback)
+                time.sleep(1)
+        self.log(f'Done with message: {message}')
 
 
     def handle_read(self, request, broadcast):
@@ -89,6 +98,16 @@ class Node():
     def parse_message(self, incoming):
         return json.loads(incoming)
 
+    def rpc(self, response, request, handler):
+        with self.lock:
+            self.next_response_id += 1
+            msg_id = self.next_response_id
+            self.callbacks[msg_id] = handler
+            response['body']['msg_id'] = msg_id
+            self.send(response)
+
+
+    
     def main(self):
         while True:
             """Handles a message from stdin, if one is currently available."""
@@ -102,10 +121,20 @@ class Node():
             request = self.parse_message(line)
             self.log(f'Received message: {request}')
 
-            with self.lock:
+            with self.lock:                
                 request_type = request['body']['type']
-                handler = self.handlers.get(request_type)
+                handler = None
+
+                # check if its response of a broadcast from this node
+                if request['body'].get('in_reply_to'):
+                    in_reply_to = request['body'].get('in_reply_to')
+                    handler = self.callbacks.pop(in_reply_to)
+                    self.log(f'Handling callback for {in_reply_to}')
+                else:
+                    handler = self.handlers.get(request_type)
+                    
                 if handler:
-                    handler(request)
+                    t = threading.Thread(target=handler, args=(request,))
+                    t.start()
                 else:
                     raise Exception(f'Unable to find handler for request type: {request_type}')
