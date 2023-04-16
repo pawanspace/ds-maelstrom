@@ -14,30 +14,52 @@ class Node():
         self.log_lock = threading.Lock()
         self.handlers = dict()
         self.callbacks = dict()
+        self.periodic_tasks = dict() # key is duration
         self.init_handlers()
 
+    def every(self, task, delay):
+        self.periodic_tasks[delay] = task
+        
+    def start_periodic_tasks(self):
+        for delay, task in self.periodic_tasks.items():
+            t = threading.Thread(target=self.periodic_task_runner, args=(task, delay))
+            t.start()
+
+    def periodic_task_runner(self, task, delay):
+        while True:
+            task()
+            time.sleep(delay)
+
+        
     def init_handlers(self):
         self.handlers['init'] = self.handle_init
         self.handlers['echo'] = self.handle_echo
 
+    def handle_add(self, request, server):
+        with server.lock:
+            server.messages.add(request['body']['element'])
+        self.reply(self.generate_response('add_ok', request['src']), request)
+        
     def handle_init(self, request):
         self.node_id = request['body']['node_id']
+        self.node_ids = request['body']['node_ids']
         self.log(f'Initialized Node {self.node_id}')
-        self.reply(self.generate_response(request, 'init_ok', request['src']), request)
+        self.reply(self.generate_response('init_ok', request['src']), request)
+        self.start_periodic_tasks()
 
     def handle_echo(self, request):
-        response = self.generate_response(request, 'echo_ok', request['src'])
+        response = self.generate_response('echo_ok', request['src'])
         response['body']['echo'] = request['body']['echo']
         self.reply(response, request)
 
     def handle_topology(self, request, broadcast):
         broadcast.neighbors = request['body']['topology'][self.node_id]
         self.log(f'My neighbors are {broadcast.neighbors}')
-        response = self.generate_response(request, 'topology_ok', request['src'])
+        response = self.generate_response('topology_ok', request['src'])
         self.reply(response, request)
                 
     def handle_broadcast(self, request, broadcast):
-        response = self.generate_response(request, 'broadcast_ok', request['src'])
+        response = self.generate_response('broadcast_ok', request['src'])
         self.reply(response, request)
         
         message = request['body']['message']
@@ -56,7 +78,7 @@ class Node():
             # send message to all neighbors
             while neighbors:
                 for n in neighbors:
-                    response = self.generate_response(request, 'broadcast', n)
+                    response = self.generate_response('broadcast', n)
                     response['body']['message'] = message
                     callback = lambda resp: neighbors.remove(n) if (resp['body']['type'] == 'broadcast_ok' and n in neighbors) else None
                     self.rpc(response, request, callback)
@@ -64,18 +86,25 @@ class Node():
         self.log(f'Done with message: {message}')
 
 
-    def handle_read(self, request, broadcast):
-        with self.lock:
-            response = self.generate_response(request, 'read_ok', request['src'])
-            response['body']['messages'] = list(broadcast.messages)
+    def handle_read(self, request, broadcast, message_key = 'messages', lock = None):
+        if lock == None:
+            lock = self.lock
+            
+        with lock:
+            response = self.generate_response('read_ok', request['src'])
+            response['body'][message_key] = list(broadcast.messages)
             self.reply(response, request)
-           
+
+    def handle_replicate(self, request, server):
+        with server.lock:
+            server.messages.union(request['body']['value'])
+            
     def log(self, message):
         with self.log_lock:
             sys.stderr.write(message)
             sys.stderr.flush()
 
-    def generate_response(self, request, response_type, dest):
+    def generate_response(self, response_type, dest):
         response = dict()
         response['src'] = self.node_id
         response['dest'] = dest
