@@ -33,13 +33,37 @@ class Counter():
         local = self.counters.copy()
         local[node_id] = local[node_id] + delta if local.get(node_id) else delta
         return Counter(local)
+
+class PNCounter():
+    def __init__(self, inc = Counter(), dec = Counter()):
+        self.inc = inc
+        self.dec = dec
+
+    def from_json(self, json):
+        return PNCounter(self.inc.from_json(json['inc']), self.dec.from_json(json['dec']))
+
+    def to_json(self):
+        return {'inc': self.inc.to_json(), 'dec': self.dec.to_json()}
+
+    def read(self):
+        return self.inc.read() - self.dec.read()
+
+    def merge(self, other):
+        return PNCounter(self.inc.merge(other.inc), self.dec.merge(other.dec))
+
+    def add(self, node_id, delta):
+        if 0 <= delta:
+            return PNCounter(self.inc.add(node_id, delta), self.dec)
+        else:
+            return PNCounter(self.inc, self.dec.add(node_id, -1 * delta))
+
     
 
 class CounterServer():
     def __init__(self):
         self.node = Node()
         self.lock = threading.Lock()
-        self.crdt = Counter()            
+        self.crdt = PNCounter()            
         self.node.handlers['add'] = lambda request: self.add(request)
         self.node.handlers['read'] = lambda request: self.read(request)
         self.node.handlers['replicate'] = lambda request: self.merge(request)
