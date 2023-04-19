@@ -3,7 +3,7 @@ import threading
 import json
 import select
 import time
-
+from promise import Promise
 class Node():
     
     def __init__(self):
@@ -81,7 +81,7 @@ class Node():
                     response = self.generate_response('broadcast', n)
                     response['body']['message'] = message
                     callback = lambda resp: neighbors.remove(n) if (resp['body']['type'] == 'broadcast_ok' and n in neighbors) else None
-                    self.rpc(response, request, callback)
+                    self.rpc(response, callback)
                 time.sleep(1)
         self.log(f'Done with message: {message}')
 
@@ -127,7 +127,7 @@ class Node():
     def parse_message(self, incoming):
         return json.loads(incoming)
 
-    def rpc(self, response, request, handler):
+    def rpc(self, response, handler):
         with self.lock:
             self.next_response_id += 1
             msg_id = self.next_response_id
@@ -135,8 +135,19 @@ class Node():
             response['body']['msg_id'] = msg_id
             self.send(response)
 
+    def add_msg_id(self, response):
+        with self.lock:
+            self.next_response_id += 1
+            msg_id = self.next_response_id
+            response['body']['msg_id'] = msg_id            
 
-    
+    def sync_rpc(self, dest, body, action):
+        response = self.generate_response(action, dest)
+        response['body'] = response['body'] | body
+        p = Promise()
+        self.rpc(response, lambda resp: p.resolve(resp))
+        return p.await_promise()
+
     def main(self):
         while True:
             """Handles a message from stdin, if one is currently available."""
