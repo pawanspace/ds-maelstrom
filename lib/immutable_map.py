@@ -1,15 +1,11 @@
+import json
 class Map():
     def __init__(self, map):
         self.map = map
 
-    def jsonKeys2int(self, x):
-        if isinstance(x, dict):            
-            return {int(k) if k.isdigit() else k :v for k,v in x.items()}
-        return x
-    
     def from_json(self, json_map):
         if json_map:
-            return Map(self.jsonKeys2int(json_map))    
+            return Map(json_map)    
         else:
             return Map({})
         
@@ -27,13 +23,14 @@ class Map():
         ret_map = self.copy()
         for t in txn:
             op, key, value = t
+            str_key = str(key)
             if op == 'r':          
-                ret_txn.append([op, key, ret_map.get(key)])
+                ret_txn.append([op, key, ret_map.get(str_key)])
             elif op == 'append':
                 ret_txn.append(t)
-                l = (ret_map.get(key).copy() if ret_map.get(key) else [])
+                l = (ret_map.get(str_key).copy() if ret_map.get(str_key) else [])
                 l.append(value)
-                ret_map = ret_map.assoc(key, l)          
+                ret_map = ret_map.assoc(str(key), l)          
         return [ret_txn, ret_map]
     
     def assoc(self, key, value):    

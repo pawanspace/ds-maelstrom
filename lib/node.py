@@ -113,20 +113,11 @@ class Node():
         response['body'] = body
         return response
 
-    def jsonKeys2int(self, x):
-        if isinstance(x, dict):            
-            return {int(k) if k.isdigit() else k :v for k,v in x.items()}
-        return x
-
-    def send(self, response, convert_str_to_int = False):
+    
+    def send(self, response):
         with self.lock:        
             self.log(f'Sending response: {type(response)}')            
-            if convert_str_to_int:
-                json_str = json.dumps(response)
-                json_value = json.loads(json_str, object_hook=self.jsonKeys2int)
-                json.dump(json_value, sys.stdout)
-            else:               
-               json.dump(response, sys.stdout)
+            json.dump(response, sys.stdout)
             sys.stdout.write('\n')
             sys.stdout.flush()
 
@@ -137,13 +128,13 @@ class Node():
     def parse_message(self, incoming):
         return json.loads(incoming)
 
-    def rpc(self, response, handler, str_to_int: False):
+    def rpc(self, response, handler):
         with self.lock:
             self.next_response_id += 1
             msg_id = self.next_response_id
             self.callbacks[msg_id] = handler
             response['body']['msg_id'] = msg_id
-            self.send(response, str_to_int)
+            self.send(response)
 
     def add_msg_id(self, response):
         with self.lock:
@@ -155,7 +146,7 @@ class Node():
         response = self.generate_response(action, dest)
         response['body'] = response['body'] | body
         p = Promise()
-        self.rpc(response, lambda resp: p.resolve(resp), True)
+        self.rpc(response, lambda resp: p.resolve(resp))
         return p.await_promise()
 
     def main(self):

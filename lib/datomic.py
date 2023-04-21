@@ -14,6 +14,9 @@ class State():
         resp = self.node.sync_rpc('lin-kv', body, 'read')
         self.node.log(f'#####ReadData {State.KEY}: {resp}')                         
         map = Map(resp['body'].get('value'))
+        
+        self.node.log(f'#####from_json {map.map}')                         
+        
         txn_resp, map_resp = map.transact(txn)
         
         body = body | {'from': map.to_json(), 'to': map_resp.to_json(), 'create_if_not_exists': 'true'}
