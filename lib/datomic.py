@@ -12,11 +12,12 @@ class State():
     def transact(self, txn):
         body = {'key': State.KEY} 
         resp = self.node.sync_rpc('lin-kv', body, 'read')
-        self.node.log(f'Read {State.KEY}: {resp}')                         
+        self.node.log(f'#####ReadData {State.KEY}: {resp}')                         
         map = Map(resp['body'].get('value'))
         txn_resp, map_resp = map.transact(txn)
         
-        body = body | {'from': map.to_json(), 'to': map_resp.to_json(),'create_if_not_exists': 'true'}
+        body = body | {'from': map.to_json(), 'to': map_resp.to_json(), 'create_if_not_exists': 'true'}
+        self.node.log(f'#####PCPCPCPC sending response with body: {body}')
         resp = self.node.sync_rpc('lin-kv', body, 'cas')       
 
         if resp['body'] ['type'] != 'cas_ok':
