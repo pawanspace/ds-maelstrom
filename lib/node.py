@@ -4,6 +4,37 @@ import json
 import select
 import time
 from promise import Promise
+
+
+class RPCError(BaseException):
+    def __init__(self, code, message):
+        self.code = code
+        self.message = message
+        super().__init__(self.message)
+    
+    @staticmethod 
+    def timeout(msg): return RPCError(0, msg)
+    @staticmethod 
+    def not_supported(msg): return RPCError(10, msg)
+    @staticmethod 
+    def temporarily_unavailable(msg): return RPCError(11, msg)
+    @staticmethod 
+    def malformed_request(msg): return RPCError(12, msg)
+    @staticmethod 
+    def crash(msg): return RPCError(13, msg)
+    @staticmethod 
+    def abort(msg): return RPCError(14, msg)
+    @staticmethod 
+    def key_does_not_exist(msg): return RPCError( 20, msg)
+    @staticmethod 
+    def precondition_failed(msg): return RPCError( 22, msg)
+    @staticmethod 
+    def txn_conflict(msg): return RPCError(30, msg)
+
+    def to_json(self):
+        return {'type': "error", 'code': self.code, 'text': self.message}
+
+
 class Node():
     
     def __init__(self):
@@ -148,6 +179,20 @@ class Node():
         p = Promise()
         self.rpc(response, lambda resp: p.resolve(resp))
         return p.await_promise()
+
+    def handler_exec(self, handler, request):
+        try:
+            handler(request)
+        except RPCError as e:
+            response = self.generate_response('error', request['src'])
+            response['body'] = e.to_json()
+            self.reply(response, request)
+        except Exception as e:
+            self.log(f'Exception handling {request}:\n{getattr(e, "message", repr(e))}')     
+            response = self.generate_response('error', request['src'])
+            response['body'] = RPCError.crash(getattr(e, 'message', repr(e))).to_json()
+            self.reply(response, request)
+        
 
     def main(self):
         while True:

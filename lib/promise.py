@@ -2,7 +2,7 @@ import threading
 
 class Promise():
     WAITING = {}
-    TIMEOUT = 10
+    TIMEOUT = 5
 
     def __init__(self):
         self.lock = threading.Lock()

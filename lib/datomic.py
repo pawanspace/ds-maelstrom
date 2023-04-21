@@ -2,6 +2,7 @@
 
 import threading
 from node import Node
+from node import RPCError
 from immutable_map import Map
 
 class State():
@@ -24,7 +25,7 @@ class State():
         resp = self.node.sync_rpc('lin-kv', body, 'cas')       
 
         if resp['body'] ['type'] != 'cas_ok':
-            raise Exception(f'CAS failed for {State.KEY}')
+            raise RPCError.txn_conflict(f'CAS failed for {State.KEY}')
                 
         return txn_resp
 
