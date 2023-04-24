@@ -74,7 +74,6 @@ class Node():
     def handle_init(self, request):
         self.node_id = request['body']['node_id']
         self.node_ids = request['body']['node_ids']
-        self.log(f'Initialized Node {self.node_id}')
         self.reply(self.generate_response('init_ok', request['src']), request)
         self.start_periodic_tasks()
 
@@ -131,9 +130,9 @@ class Node():
             server.messages.union(request['body']['value'])
             
     def log(self, message):
-        with self.log_lock:
+        with self.log_lock:            
             sys.stderr.write("\n")
-            sys.stderr.write(message)
+            sys.stderr.write(f'node_id={self.node_id} : {message}')
             sys.stderr.flush()
 
     def generate_response(self, response_type, dest):
