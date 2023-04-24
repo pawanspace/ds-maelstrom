@@ -132,6 +132,7 @@ class Node():
             
     def log(self, message):
         with self.log_lock:
+            sys.stderr.write("\n")
             sys.stderr.write(message)
             sys.stderr.flush()
 
@@ -147,7 +148,7 @@ class Node():
     
     def send(self, response):
         with self.lock:        
-            self.log(f'Sending response: {type(response)}')            
+            self.log(f'Sending response: {response}')            
             json.dump(response, sys.stdout)
             sys.stdout.write('\n')
             sys.stdout.flush()
