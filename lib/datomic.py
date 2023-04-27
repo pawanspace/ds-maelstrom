@@ -15,22 +15,27 @@ class State():
     def transact(self, txn):
         body = {'key': State.KEY} 
         resp = self.node.sync_rpc('lin-kv', body, 'read')
-        self.node.log(f'#####ReadData {State.KEY}: {resp}')                         
-        map = Map.from_json(self.node, self.id_gen, resp['body'].get('value'))
+        self.node.log(f'#####ReadData {State.KEY}: {resp}')
+        saved = True if resp['body'].get('value') else False
+        map_id = resp['body']['value'] if resp['body'].get('value') else self.id_gen.new_id()
+        map = Map(self.node, self.id_gen, map_id, saved)
         
         self.node.log(f'#####from_json {map.map}')                         
         
         txn_resp, map_resp = map.transact(txn)
         
         self.node.log(f"@map_resp {map_resp}")
-        #Save all thunks
-        map_resp.save()
-        body = body | {'from': map.to_json(), 'to': map_resp.to_json(), 'create_if_not_exists': 'true'}
-        self.node.log(f'#####PCPCPCPC sending response with body: {body}')
-        resp = self.node.sync_rpc('lin-kv', body, 'cas')       
 
-        if resp['body'] ['type'] != 'cas_ok':
-            raise RPCError.txn_conflict(f'CAS failed for {State.KEY}')
+        if map.id != map_resp.id:
+            #Save all thunks
+            map_resp.save()
+            body = body | {'from': map.id, 'to': map_resp.id, 'create_if_not_exists': 'true'}
+            self.node.log(f'#####PCPCPCPC sending response with body: {body}')
+            resp = self.node.sync_rpc('lin-kv', body, 'cas')       
+
+            if resp['body']['type'] != 'cas_ok':
+                self.node.log(f"@error for cas {resp}")
+                raise RPCError.txn_conflict(f'CAS failed for {State.KEY}')
                 
         return txn_resp
 

@@ -21,7 +21,8 @@ class Thunk():
             return self.value
         else:
             body = {'key': self.id} 
-            return self.node.sync_rpc('lin-kv', body, 'read')['body']['value']
+            self.value = self.node.sync_rpc('lin-kv', body, 'read')['body']['value']
+            return self.value
             
     def save(self):
         if self.saved:
