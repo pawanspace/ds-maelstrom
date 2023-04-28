@@ -1,6 +1,8 @@
 from thunk import Thunk
 from node import RPCError
+import time
 
+SVC = 'lww-kv'
 class Map():
     def __init__(self, node, id_gen, id, saved, map = None):
         self.map = map
@@ -43,23 +45,24 @@ class Map():
     def copy(self):
         return Map(self.node, self.id_gen,  self.id, False, self.map.copy() if self.map else None)
 
-
     def get_map(self):
-        if self.map:
-            return self.map
-        else:
-            body = {'key': self.id}
-            resp = self.node.sync_rpc('lin-kv', body, 'read')
-            self.node.log(f'for key: {self.id}  @response_get_map {resp}')
-            return self.from_json(resp['body'].get('value'))
+        body = {'key': self.id}
+        while not self.map:
+            resp = self.node.sync_rpc(SVC, body, 'read')
+            if resp['body']['type'] == 'read_ok':
+                self.map = self.from_json(resp['body'].get('value'))
+                continue
+            else:
+                time.sleep(0.01)
+                continue
+
+        return self.map
             
     def save_self(self):
         self.node.log(f"@saving_self with id: {self.id}")
-        if self.saved:
-            return
-        else:
+        while not self.saved:
             body = {'key': self.id, 'value': self.to_json()}
-            resp = self.node.sync_rpc('lin-kv', body, 'write')
+            resp = self.node.sync_rpc(SVC, body, 'write')
             if resp['body']['type'] == 'write_ok':
                 self.saved = True
             else:
