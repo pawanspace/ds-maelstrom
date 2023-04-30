@@ -1,8 +1,6 @@
 from thunk import Thunk
 from node import RPCError
 import time
-
-SVC = 'lww-kv'
 class Map():
     def __init__(self, node, id_gen, id, saved, map = None):
         self.map = map
@@ -25,7 +23,7 @@ class Map():
     #@potential_error the return format can be wrong
     def to_json(self):
         resp = []
-        if self.map:        
+        if self.map != None:        
             for key, value in self.map.items():
                 resp.append([key, value.get_id()])
         return resp
@@ -37,32 +35,33 @@ class Map():
     
     def get(self, key):
         self.map = self.get_map()
-        if self.map and self.map.get(key) and self.map.get(key).get_value():
+        if self.map != None and self.map.get(key) and self.map.get(key).get_value():
             return self.map.get(key).value.copy()
         else:
             return None
 
     def copy(self):
-        return Map(self.node, self.id_gen,  self.id, False, self.map.copy() if self.map else None)
+        return Map(self.node, self.id_gen,  self.id, False, self.map.copy() if self.map != None else None)
+
 
     def get_map(self):
-        body = {'key': self.id}
-        while not self.map:
-            resp = self.node.sync_rpc(SVC, body, 'read')
-            if resp['body']['type'] == 'read_ok':
-                self.map = self.from_json(resp['body'].get('value'))
-                continue
-            else:
-                time.sleep(0.01)
-                continue
+        if self.map != None:
+            return self.map
+        else:
+            body = {'key': self.id}
+            while True:
+                resp = self.node.sync_rpc('lww-kv', body, 'read')['body']
+                if resp['type'] == 'read_ok':
+                    self.map = self.from_json(resp['value'])
+                    return self.map
+                else:
+                    time.sleep(0.01)
 
-        return self.map
-            
     def save_self(self):
         self.node.log(f"@saving_self with id: {self.id}")
         while not self.saved:
             body = {'key': self.id, 'value': self.to_json()}
-            resp = self.node.sync_rpc(SVC, body, 'write')
+            resp = self.node.sync_rpc('lww-kv', body, 'write')
             if resp['body']['type'] == 'write_ok':
                 self.saved = True
             else:
@@ -91,21 +90,8 @@ class Map():
     def assoc(self, key, value):
         self.node.log(f"@assoc {key} {value}")
         thunk = Thunk(self.node, self.id_gen.new_id(), value, False, self.id_gen)
-
         self.node.log(f"@thunk {thunk}")
-       # merged = {key: thunk}
-        # #@protential_error respnse format can be different
-        # for k, v in self.map.items():
-        #     if k == key:
-        #         existing_value = v.get_value()
-        #         self.node.log(f'@thunk_merging to {thunk.id} with value {thunk.value} from {v.id} with value {existing_value}')
-        #         thunk.value = list(set((existing_value if existing_value else []) + thunk.value))
-        #         self.node.log(f'@thunk_merging_result {thunk.value}')  
-        #        merged[k] = thunk
-            # else:
-            #     merged[k] = v
-
-        merged = self.map.copy()
+        merged = self.map.copy() if self.map else {}
         merged[key] = thunk
         return Map(self.node, self.id_gen, self.id_gen.new_id(), False, merged)
     

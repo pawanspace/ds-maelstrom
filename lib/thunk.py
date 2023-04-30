@@ -1,9 +1,8 @@
 from id_gen import IDGen
 from node import RPCError
 import time
-SVC = 'lww-kv'
 
-class Thunk():   
+class Thunk():
     def __init__(self, node, id, value, saved, id_gen):
         self.node = node
         self.id = id
@@ -19,22 +18,22 @@ class Thunk():
         return self.id if self.id else self.id_gen.new_id
         
     def get_value(self):
-        body = {'key': self.id} 
-        while not self.value:
-            resp = self.node.sync_rpc(SVC, body, 'read')
-            if resp['body']['type'] == 'read_ok':
-                self.value = resp['body']['value']
-                continue
-            else:
-                time.sleep(0.01)
-                continue
-    
-        return self.value
-        
+        if self.value:
+            return self.value
+        else:           
+            body = {'key': self.id}
+            resp = self.node.sync_rpc('lww-kv', body, 'read')['body']               
+            while True:
+                if resp['type'] == 'read_ok':
+                    self.value = resp['value']
+                    return self.value
+                else:
+                    time.sleep(0.01)   
+            
     def save(self):
         while not self.saved:
             body = {'key': self.id, 'value': self.value}
-            resp = self.node.sync_rpc(SVC, body, 'write')
+            resp = self.node.sync_rpc('lww-kv', body, 'write')
             if resp['body']['type'] == 'write_ok':
                 self.saved = True
             else:

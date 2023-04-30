@@ -17,8 +17,10 @@ class State():
         resp = self.node.sync_rpc('lin-kv', body, 'read')
         self.node.log(f'#####ReadData {State.KEY}: {resp}')
         saved = True if resp['body'].get('value') else False
-        map_id = resp['body']['value'] if resp['body'].get('value') else self.id_gen.new_id()
-        map = Map(self.node, self.id_gen, map_id, saved)
+        has_existing_value = True if resp['body'].get('value') else False
+        map_id = resp['body']['value'] if has_existing_value else self.id_gen.new_id()
+        map_value = None if has_existing_value else {}
+        map = Map(self.node, self.id_gen, map_id, saved, map_value)
         
         self.node.log(f'#####from_json {map.map}')                         
         
