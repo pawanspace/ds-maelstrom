@@ -13,7 +13,10 @@ class Map():
         key = op['key']
         match op['type']:
             case "read":
-                return [self, self.generate_response(node, 'read_ok', request['src'], {"type": "read_ok", "value": self.data[key]})] if self.data.get(key) else [self, RPCError.key_does_not_exist('not found').to_json()]
+                if self.data.get(key):
+                    return [self, self.generate_response(node, 'read_ok', request['src'], {"type": "read_ok", "value": self.data[key]})] 
+                else: 
+                    return [self, self.generate_response(node, 'error',  request['src'], RPCError.key_does_not_exist('not found').to_json())]
             case "write":
                 updated_data = self.data.copy()
                 updated_data[key] = op['value'] 
