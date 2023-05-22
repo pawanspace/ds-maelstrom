@@ -135,11 +135,10 @@ class Node():
             sys.stderr.write(f'node_id={self.node_id} : {message}')
             sys.stderr.flush()
 
-    def generate_response(self, response_type, dest):
+    def generate_response(self, response_type, dest, body = dict()):
         response = dict()
         response['src'] = self.node_id
         response['dest'] = dest
-        body = dict()
         body['type'] = response_type
         response['body'] = body
         return response
