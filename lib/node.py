@@ -48,6 +48,9 @@ class Node():
         self.periodic_tasks = dict() # key is duration
         self.init_handlers()
 
+    def now(self):
+        return time.time()
+
     def every(self, task, delay):
         self.periodic_tasks[delay] = task
         
@@ -60,6 +63,20 @@ class Node():
         while True:
             task()
             time.sleep(delay)
+
+
+    def other_node_ids(self):
+        return list(filter(lambda x: x != self.node_id, self.node_ids))
+        
+    # Sends a broadcast rpc request
+    # invokes handler on response
+    def brpc(self, body, handler):
+        for node_id in self.other_node_ids():
+            response = self.generate_response('request_vote', node_id, body)
+            p = Promise()
+            self.rpc(response, lambda resp: p.resolve(resp))
+            response = p.await_promise()
+            handler(response)
 
         
     def init_handlers(self):
