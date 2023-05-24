@@ -57,7 +57,7 @@ class Log():
     
     def append(self, entries):
         self.entries.extend(entries)
-        self.node.log(f"Log: contains {self.entries} entries")
+        #self.node.log(f"Log: contains {self.entries} entries")
 
     def last(self):
         return self.entries[-1]
@@ -203,7 +203,7 @@ class Raft():
 
                     # if we haven't replicated in the heartbeat interval, we'll send this node an appendEntries message.
                     if len(entries) > 0 or self.heart_beat_interval < elapsed_time:
-                        self.node.log(f"Replicating {entries} to {n}")
+                        self.node.log(f"Replicating to {n}")
                         replicated = True                        
                         request_body = {
                             'type': 'append_entries',

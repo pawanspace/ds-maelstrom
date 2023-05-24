@@ -229,13 +229,20 @@ class Node():
                 # check if its response of a broadcast from this node
                 if request['body'].get('in_reply_to'):
                     in_reply_to = request['body'].get('in_reply_to')
+                    self.log(f'Handling callback for {in_reply_to} with available callbacks: {self.callbacks}')
                     handler = self.callbacks.pop(in_reply_to)
                     self.log(f'Handling callback for {in_reply_to}')
                 else:
                     handler = self.handlers.get(request_type)
                     
+                def execute(request):
+                    try:
+                        handler(request)
+                    except(RPCError, Exception) as e:
+                        self.log(f'got exception {e}')
+                
                 if handler:
-                    t = threading.Thread(target=handler, args=(request,))
+                    t = threading.Thread(target=execute, args=(request,))
                     t.start()
                 else:
                     raise Exception(f'Unable to find handler for request type: {request_type}')
