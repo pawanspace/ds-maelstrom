@@ -64,7 +64,6 @@ class Node():
             task()
             time.sleep(delay)
 
-
     def other_node_ids(self):
         return list(filter(lambda x: x != self.node_id, self.node_ids))
         

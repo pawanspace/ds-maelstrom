@@ -49,17 +49,31 @@ class Log():
         self.node = node
         self.entries = [{"term": 0, "op": None}]
 
-    def __getitem__(self, index):
-        return self.entries[index]
+    def __getitem__(self, index):        
+        try:
+            return self.entries[index - 1]
+        except(IndexError):
+            return None
     
     def append(self, entries):
         self.entries.extend(entries)
+        self.node.log(f"Log: contains {self.entries} entries")
 
     def last(self):
         return self.entries[-1]
 
     def size(self):
         return len(self.entries)
+    
+    #Log truncation is important--we need to delete all mismatching log entries after the given index.
+    def truncate(self, index):
+        self.entries = self.entries[:index]
+    
+    def from_index(self, index):
+        if index <= 0:
+            raise Exception(f"Illegal index {index}")
+            
+        return self.entries[index-1:]
 
 class State(Enum):
     Follower = 1,
@@ -68,30 +82,171 @@ class State(Enum):
 
 class Raft():
     def __init__(self):
+        # Components
         self.node = Node()
         self.lock = threading.RLock()
         self.state_machine = Map()
-        self.state = State.Follower
-        self.election_timeout = 2
-        self.election_deadline = self.node.now()
-        self.stepdown_deadline = self.node.now()
-        self.term = 0
         self.log = Log(self.node)
-        self.voted_for = None
+
+        # Raft state
+        self.state = State.Follower # Either follower, candidate, or leader      
+        self.term = 0 # What's our current term?        
+        self.voted_for = None # Which node did we vote for in this term?
+
+        # Heartbeats and timeouts
+        self.election_timeout = 2 # Time before next election, in seconds
+        self.heart_beat_interval = 1 # Time between heartbeats, in seconds
+        self.min_replication_interval = 0.05 # Don't replicate TOO frequently
+
+        self.election_deadline = self.node.now()  # Next election, in epoch seconds
+        self.stepdown_deadline = self.node.now() # When to step down automatically.
+        self.last_replication = self.node.now() # When did we last replicate?
+      
+        # Leader state
+        self.commit_index = 0 # The highest committed entry in the log
+        self.next_index = None # A map of nodes to the next index to replicate
+        self.match_index = None # A map of (other) nodes to the highest log entry
+                                # known to be replicated on that node.
+
 
         self.node.handlers['read'] = lambda request: self.client_req(request)
         self.node.handlers['write'] = lambda request: self.client_req(request)
         self.node.handlers['cas'] = lambda request: self.client_req(request)
         self.node.handlers['request_vote'] = lambda request: self.grant_vote(request)
+        self.node.handlers['append_entries'] = lambda request: self.handle_append_entries(request)
+
 
         self.node.every(lambda: self.leader_heart_beat(), 0.1)
-        self.node.every(lambda: self.heart_beat(), 1)
+        self.node.every(lambda: self.heart_beat(), self.heart_beat_interval)
+        self.node.every(lambda: self.replicate_log(False), self.min_replication_interval)
         
 
+    def get_match_index(self):
+        self.match_index.extend({self.node.node_id: self.log.size()})
+
+
+
+    def handle_append_entries(self, request):
+        with self.lock:
+            body = request['body']
+            self.maybe_step_down(body['term'])
+
+            response_body  = {
+                'type': 'append_entries_res',
+                'term': self.term,
+                'success': False
+            }
+
+            if body['term'] < self.term:
+                self.node.log(f"Ignoring {body} because it's in a later term")
+                response = self.node.generate_response('append_entries_res', request['src'], response_body)
+                self.node.reply(response, request)
+                return
+
+            # valid leader lets reset election deadline
+            self.reset_election_deadline()
+
+            # Check previous entry to see if it matches
+            if body['prev_log_index'] <= 0:
+                raise RPCError.abort(f"Out of bounds previous log index {body['prev_log_index']}")
+
+            previous_log_entry = self.log[body['prev_log_index']]
+
+            # If the previous entry doesn't exist, or if we disagree on its term, we'll reject this request
+            if previous_log_entry == None or previous_log_entry['term'] != body['prev_log_term']:
+                # We disagree on the previous term
+                self.node.log(f"We disagree on the previous term {previous_log_entry}")
+                response = self.node.generate_response('append_entries_res', request['src'], response_body)
+                self.node.reply(response, request)
+                return
+            
+            # We agree on the previous log term; truncate and append
+            # lets remove all entries from the previous log index
+            # those entries are not not correct anymore according to leader.
+            #Log truncation is important--we need to delete all mismatching log entries after the given index.
+            self.log.truncate(body['prev_log_index'])
+            self.log.append(body['entries'])
+
+            # advance commit pointer
+            if self.commit_index  < body['leader_commit']:
+                self.commit_index = min(self.log.size(), body['leader_commit'])
+
+            # Ack the replication
+            response_body['success'] = True
+            response = self.node.generate_response('append_entries_res', request['src'], response_body)
+            self.node.reply(response, request)
+
+
+
+            
+
+
+    def replicate_log(self, force):
+        with self.lock:            
+            # How long has it been since we last replicated?
+            elapsed_time = self.node.now() - self.last_replication
+            # We'll set this to true if we replicated to anyone
+            replicated = False
+            # We need the current term to ensure we don't process responses in later
+            # terms.
+            term = self.term
+
+            
+            if self.state == State.Leader and self.min_replication_interval < elapsed_time:
+                # We're a leader, and enough time elapsed
+                for n in self.node.other_node_ids():
+                    # what entries we should append?
+                    n_index = self.next_index[n]
+                    self.node.log(f"Replicating from {n_index} to {n}")
+                    entries = self.log.from_index(n_index)
+
+                    # if we haven't replicated in the heartbeat interval, we'll send this node an appendEntries message.
+                    if len(entries) > 0 or self.heart_beat_interval < elapsed_time:
+                        self.node.log(f"Replicating {entries} to {n}")
+                        replicated = True                        
+                        request_body = {
+                            'type': 'append_entries',
+                            'term': term,
+                            'leader_id': self.node.node_id,
+                            'entries': entries,
+                            'leader_commit': self.commit_index,
+                            'prev_log_index': n_index - 1,
+                            'prev_log_term': self.log[n_index - 1]['term']
+                        }
+                        
+                        response = self.node.generate_response('append_entries', n, request_body)
+
+                        def callback(result):
+                            body = result['body']
+                            self.maybe_step_down(body['term'])
+                            if self.state == State.Leader:
+                                self.reset_stepdown_deadline()
+                                if body.get('success'):
+                                    self.next_index[n] = max(self.next_index[n], (n_index + len(entries)))
+                                    self.match_index[n] = max(self.match_index[n], (n_index + len(entries) - 1))
+                                    self.node.log(f'Next index {self.next_index}')
+                                else:
+                                    # We didn't match; back up our next index for this node
+                                    # this basically means lets try with previous log entry and see if that succeeds we will keep
+                                    # going back to ensure we can replicate all pending logs to the follower 
+                                    self.next_index[n] -=1 
+                                                    
+                        self.node.rpc(response, callback)
+
+                if replicated:
+                    self.last_replication = self.node.now()                    
+
+
+    
     def client_req(self, request):
         with self.lock:
+            if self.state != State.Leader:
+                raise RPCError.temporarily_unavailable("Not leader")
+                
+            self.log.append([{"term": self.term, "op": request}])
             self.state_machine, response = self.state_machine.apply(request, self.node)
             self.node.reply(response, request)
+
 
     def leader_heart_beat(self):
         time.sleep(random.random()/10)
@@ -121,6 +276,8 @@ class Raft():
             self.state = State.Candidate
             self.advance_term(self.term + 1)
             self.voted_for = self.node.node_id
+            self.match_index = None
+            self.next_index = None
             self.reset_election_deadline()
             self.reset_stepdown_deadline()
             self.node.log(f"Became candidate for term {self.term}")
@@ -130,7 +287,15 @@ class Raft():
         with self.lock:
             if self.state != State.Candidate:
                 raise Exception("Cannot become leader when not candidate")
-            
+            self.match_index = {}
+            self.next_index = {}
+
+            for n in self.node.other_node_ids():
+                # we are taking + 1 because first entry in log is empty one
+                self.next_index[n] = self.log.size() + 1
+                self.match_index[n] = 0
+
+            self.last_replication = time.time() - time.time()
             self.state = State.Leader
             self.reset_stepdown_deadline()
             self.node.log(f"Became leader for term {self.term}")
