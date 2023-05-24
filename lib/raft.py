@@ -92,6 +92,7 @@ class Raft():
         self.state = State.Follower # Either follower, candidate, or leader      
         self.term = 0 # What's our current term?        
         self.voted_for = None # Which node did we vote for in this term?
+        self.leader = None # Who is the leader?
 
         # Heartbeats and timeouts
         self.election_timeout = 2 # Time before next election, in seconds
@@ -122,8 +123,7 @@ class Raft():
         
 
     def get_match_index(self):
-        self.match_index.extend({self.node.node_id: self.log.size()})
-
+        return self.match_index | {self.node.node_id: self.log.size()}
 
 
     def handle_append_entries(self, request):
@@ -158,6 +158,7 @@ class Raft():
                 self.node.log(f"We disagree on the previous term {previous_log_entry}")
                 response = self.node.generate_response('append_entries_res', request['src'], response_body)
                 self.node.reply(response, request)
+                self.leader = body['leader_id']
                 return
             
             # We agree on the previous log term; truncate and append
@@ -218,6 +219,7 @@ class Raft():
 
                         def callback(result):
                             body = result['body']
+                            self.node.log(f"Received {body} from {n}")
                             self.maybe_step_down(body['term'])
                             if self.state == State.Leader:
                                 self.reset_stepdown_deadline()
@@ -225,6 +227,7 @@ class Raft():
                                     self.next_index[n] = max(self.next_index[n], (n_index + len(entries)))
                                     self.match_index[n] = max(self.match_index[n], (n_index + len(entries) - 1))
                                     self.node.log(f'Next index {self.next_index}')
+                                    self.advance_commit_index()
                                 else:
                                     # We didn't match; back up our next index for this node
                                     # this basically means lets try with previous log entry and see if that succeeds we will keep
@@ -241,11 +244,16 @@ class Raft():
     def client_req(self, request):
         with self.lock:
             if self.state != State.Leader:
-                raise RPCError.temporarily_unavailable("Not leader")
-                
-            self.log.append([{"term": self.term, "op": request}])
-            self.state_machine, response = self.state_machine.apply(request, self.node)
-            self.node.reply(response, request)
+                if self.leader:
+                    body = request['body']
+                    self.node.log(f"Not leader, so proxying request to leader")
+                    self.node.reply(self.node.generate_response(body['type'], self.leader, body), request)
+                else:
+                    raise RPCError.temporarily_unavailable("Not leader")
+            else: 
+                self.log.append([{"term": self.term, "op": request}])
+                self.state_machine, response = self.state_machine.apply(request, self.node)
+                self.node.reply(response, request)
 
 
     def leader_heart_beat(self):
@@ -276,8 +284,7 @@ class Raft():
             self.state = State.Candidate
             self.advance_term(self.term + 1)
             self.voted_for = self.node.node_id
-            self.match_index = None
-            self.next_index = None
+            self.leader = None            
             self.reset_election_deadline()
             self.reset_stepdown_deadline()
             self.node.log(f"Became candidate for term {self.term}")
@@ -289,13 +296,13 @@ class Raft():
                 raise Exception("Cannot become leader when not candidate")
             self.match_index = {}
             self.next_index = {}
-
+            self.last_replication = time.time() - time.time()
+            self.leader = None
             for n in self.node.other_node_ids():
                 # we are taking + 1 because first entry in log is empty one
                 self.next_index[n] = self.log.size() + 1
                 self.match_index[n] = 0
 
-            self.last_replication = time.time() - time.time()
             self.state = State.Leader
             self.reset_stepdown_deadline()
             self.node.log(f"Became leader for term {self.term}")
@@ -303,6 +310,9 @@ class Raft():
     def become_follower(self):
         with self.lock:
             self.state = State.Follower
+            self.match_index = None
+            self.next_index = None
+            self.leader = None
             self.reset_election_deadline()
             self.node.log("Became follower")
 
@@ -335,6 +345,7 @@ class Raft():
                     body = response['body']
                     if self.state == State.Candidate:
                         if self.term == term and self.term == body['term']:
+                            self.node.log(f"vote_granted vote for term {body}")
                             if body['vote_granted']:
                                 votes.add(response['src'])
                                 self.node.log(f"Have votes: {votes}")
@@ -347,7 +358,19 @@ class Raft():
 
     def majority(self, n):
         return math.floor(n/2.0) + 1
+    
 
+    def mean(self, values):
+        values.sort()
+        return values[len(values) - self.majority(len(values))]
+
+    def advance_commit_index(self):
+        with self.lock:
+            if self.state == State.Leader:
+                new_commit_index = self.mean(list(self.get_match_index().values()))
+                if new_commit_index > self.commit_index and self.term == self.log[new_commit_index]['term']:
+                    self.node.log(f"Advancing commit index to {new_commit_index}")
+                    self.commit_index = new_commit_index
 
     def grant_vote(self, request):
         with self.lock:
