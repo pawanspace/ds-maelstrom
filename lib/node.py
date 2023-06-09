@@ -230,19 +230,22 @@ class Node():
                 if request['body'].get('in_reply_to'):
                     in_reply_to = request['body'].get('in_reply_to')
                     self.log(f'Handling callback for {in_reply_to} with available callbacks: {self.callbacks}')
-                    handler = self.callbacks.pop(in_reply_to)
-                    self.log(f'Handling callback for {in_reply_to}')
+                    if in_reply_to in self.callbacks:                    
+                        handler = self.callbacks.pop(in_reply_to)
+                        self.log(f'Handling callback for {in_reply_to}')
+                    else:
+                        self.log('ignoring reply to {in_reply_to} with no callbacks')
                 else:
                     handler = self.handlers.get(request_type)
                     
-                def execute(request):
-                    try:
-                        handler(request)
-                    except(RPCError, Exception) as e:
-                        self.log(f'got exception {e}')
-                
-                if handler:
-                    t = threading.Thread(target=execute, args=(request,))
-                    t.start()
-                else:
-                    raise Exception(f'Unable to find handler for request type: {request_type}')
+            def execute(request):
+                try:
+                    handler(request)
+                except(RPCError, Exception) as e:
+                    self.log(f'got exception {e}')
+            
+            if handler:
+                t = threading.Thread(target=execute, args=(request,))
+                t.start()
+            else:
+                raise Exception(f'Unable to find handler for request type: {request_type}')

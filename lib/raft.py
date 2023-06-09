@@ -110,6 +110,9 @@ class Raft():
                                 # known to be replicated on that node.
 
 
+        self.last_applied = 1
+
+
         self.node.handlers['read'] = lambda request: self.client_req(request)
         self.node.handlers['write'] = lambda request: self.client_req(request)
         self.node.handlers['cas'] = lambda request: self.client_req(request)
@@ -124,6 +127,21 @@ class Raft():
 
     def get_match_index(self):
         return self.match_index | {self.node.node_id: self.log.size()}
+
+
+    def advance_state_machine(self):
+        with self.lock:
+            while self.last_applied < self.commit_index:
+                #advance the applied index and apply that op
+                self.last_applied += 1
+                request = self.log[self.last_applied]['op']
+                self.node.log(f"Applying {request}")
+                self.state_machine, response = self.state_machine.apply(request, self.node)
+                self.node.log(f"State machine resonse: {response}")
+
+                if self.state == State.Leader:
+                    # we are currently the leader, so we need to send a response to the client
+                    self.node.reply(response, request)
 
 
     def handle_append_entries(self, request):
@@ -171,6 +189,8 @@ class Raft():
             # advance commit pointer
             if self.commit_index  < body['leader_commit']:
                 self.commit_index = min(self.log.size(), body['leader_commit'])
+            # for followers
+            self.advance_state_machine()
 
             # Ack the replication
             response_body['success'] = True
@@ -252,8 +272,9 @@ class Raft():
                     raise RPCError.temporarily_unavailable("Not leader")
             else: 
                 self.log.append([{"term": self.term, "op": request}])
-                self.state_machine, response = self.state_machine.apply(request, self.node)
-                self.node.reply(response, request)
+                # self.state_machine, response = self.state_machine.apply(request, self.node)
+                # self.node.log(f"@sending_response {response}")
+                # self.node.reply(response, request)
 
 
     def leader_heart_beat(self):
@@ -371,6 +392,7 @@ class Raft():
                 if new_commit_index > self.commit_index and self.term == self.log[new_commit_index]['term']:
                     self.node.log(f"Advancing commit index to {new_commit_index}")
                     self.commit_index = new_commit_index
+            self.advance_state_machine()
 
     def grant_vote(self, request):
         with self.lock:
